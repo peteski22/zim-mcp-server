@@ -147,11 +147,11 @@ async def list_zim_files() -> str:
 
 
 @mcp.tool()
-async def search_zim_file(zimFilePath: str, query: str, limit: int = 10, offset: int = 0) -> str:
-    """Search within ZIM file content
+async def search_zim_file(zim_file_path: str, query: str, limit: int = 10, offset: int = 0) -> str:
+    """Search within ZIM file content.
 
     Args:
-        zimFilePath: Path to the ZIM file
+        zim_file_path: Path to the ZIM file
         query: Search query term
         limit: Maximum number of results to return
         offset: Result starting offset (for pagination)
@@ -159,24 +159,25 @@ async def search_zim_file(zimFilePath: str, query: str, limit: int = 10, offset:
     Returns:
         Search result text
     """
+    archive = None
     try:
         if path_manager:
-            valid_path = path_manager.validate_path(zimFilePath)
+            valid_path = path_manager.validate_path(zim_file_path)
         else:
-            valid_path = zimFilePath
-            if not os.path.exists(valid_path):
+            valid_path = zim_file_path
+            if not Path.exists(Path(valid_path)):
                 return f"Error: ZIM file not found: {valid_path}"
 
         # Validate file exists and is a ZIM file
         valid_path_obj = Path(valid_path)
         if not valid_path_obj.is_file():
             return "Error: Specified path is not a file"
-        if not valid_path_obj.suffix.lower() == '.zim':
+        if valid_path_obj.suffix.lower() != ".zim":
             return "Error: Specified file is not a ZIM file"
 
         # Open ZIM archive
-        archive = Archive(valid_path)
-        print(f"Archive opened: {valid_path}", file=sys.stderr)
+        archive = Archive(valid_path_obj)
+        print(f"Archive opened: {valid_path_obj}", file=sys.stderr)
 
         # Create searcher and execute search
         query_obj = Query().set_query(query)
@@ -205,46 +206,39 @@ async def search_zim_file(zimFilePath: str, query: str, limit: int = 10, offset:
                 # Get content snippet
                 try:
                     item = entry.get_item()
-                    if item.mimetype.startswith('text/'):
-                        raw_content = bytes(item.content).decode(
-                            'utf-8', errors='replace')
-                        if item.mimetype.startswith('text/html'):
+                    if item.mimetype.startswith("text/"):
+                        raw_content = bytes(item.content).decode("utf-8", errors="replace")
+                        if item.mimetype.startswith("text/html"):
                             # Use the new html_to_plain_text function
                             content_text = html_to_plain_text(raw_content)
                             # Extract first few paragraphs as snippet
-                            paragraphs = content_text.split('\n\n')
-                            if paragraphs:
-                                snippet = ' '.join(
-                                    # Take only first two paragraphs to keep it concise
-                                    paragraphs[:2])
-                            else:
-                                snippet = content_text
+                            paragraphs = content_text.split("\n\n")
+                            # Take only first two paragraphs to keep it concise
+                            snippet = " ".join(paragraphs[:2]) if paragraphs else content_text
                         else:
                             snippet = raw_content
 
                         # Limit length
-                        snippet = snippet[:1000].strip(
-                        ) + "..." if len(snippet) > 1000 else snippet
+                        snippet = snippet[:1000].strip() + "..." if len(snippet) > 1000 else snippet
                     else:
                         snippet = f"(Unsupported content type: {item.mimetype})"
                 except Exception as e:
                     print(
-                        f"Error getting content for entry {entry_id}: {str(e)}", file=sys.stderr)
+                        f"Error getting content for entry {entry_id}: {str(e)}",
+                        file=sys.stderr,
+                    )
                     snippet = "(Unable to get content preview)"
 
-                results.append({
-                    "path": entry_id,
-                    "title": title,
-                    "snippet": snippet
-                })
+                results.append({"path": entry_id, "title": title, "snippet": snippet})
             except Exception as e:
-                print(
-                    f"Error getting entry {entry_id}: {str(e)}", file=sys.stderr)
-                results.append({
-                    "path": entry_id,
-                    "title": f"Entry {offset + i + 1}",
-                    "snippet": f"(Error getting entry details: {str(e)})"
-                })
+                print(f"Error getting entry {entry_id}: {str(e)}", file=sys.stderr)
+                results.append(
+                    {
+                        "path": entry_id,
+                        "title": f"Entry {offset + i + 1}",
+                        "snippet": f"(Error getting entry details: {str(e)})",
+                    }
+                )
 
         # Build result text
         result_text = f'Found {total_results} matches for "{query}", showing {offset + 1}-{offset + len(results)}:\n\n'
@@ -259,48 +253,60 @@ async def search_zim_file(zimFilePath: str, query: str, limit: int = 10, offset:
     except Exception as e:
         print(f"Error searching ZIM file: {str(e)}", file=sys.stderr)
         return f"Error: Failed to search ZIM file: {str(e)}"
+    finally:
+        # Ensure archive is properly closed to prevent resource leaks
+        if archive is not None:
+            try:
+                # We need to ensure cleanup, the libzim Python binding should handle this via __del__, but we force it.
+                del archive
+                print(f"Archive closed for: {zim_file_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error closing archive: {str(e)}", file=sys.stderr)
 
 
 @mcp.tool()
-async def get_zim_entry(zimFilePath: str, entryPath: str, maxContentLength: int = 100000) -> str:
-    """Get detailed content of a specific entry in a ZIM file
+async def get_zim_entry(zim_file_path: str, entry_path: str, max_content_length: int = 100000) -> str:
+    """Get detailed content of a specific entry in a ZIM file.
 
     Args:
-        zimFilePath: Path to the ZIM file
-        entryPath: Entry path, e.g., 'A/Some_Article'
-        maxContentLength: Maximum length of content to return
+        zim_file_path: Path to the ZIM file
+        entry_path: Entry path, e.g., 'A/Some_Article'
+        max_content_length: Maximum length of content to return
 
     Returns:
         Entry content text
     """
+    archive = None
     try:
         # Validate file path
         if path_manager:
-            valid_path = path_manager.validate_path(zimFilePath)
+            valid_path = path_manager.validate_path(zim_file_path)
         else:
-            valid_path = zimFilePath
-            if not os.path.exists(valid_path):
+            valid_path = zim_file_path
+            if not Path.exists(Path(valid_path)):
                 return f"Error: ZIM file not found: {valid_path}"
 
         # Validate file exists and is a ZIM file
         valid_path_obj = Path(valid_path)
         if not valid_path_obj.is_file():
             return "Error: Specified path is not a file"
-        if not valid_path_obj.suffix.lower() == '.zim':
+        if valid_path_obj.suffix.lower() != ".zim":
             return "Error: Specified file is not a ZIM file"
 
         # Open ZIM archive
-        archive = Archive(valid_path)
+        archive = Archive(Path(valid_path))
         print(
-            f"Archive opened: {valid_path}, attempting to get entry: {entryPath}", file=sys.stderr)
+            f"Archive opened: {valid_path}, attempting to get entry: {entry_path}",
+            file=sys.stderr,
+        )
 
         # Get specified entry
         try:
-            entry = archive.get_entry_by_path(entryPath)
+            entry = archive.get_entry_by_path(entry_path)
 
             # Get entry title
             title = entry.title or "Untitled"
-            print(f"Entry found: {title}, path: {entryPath}", file=sys.stderr)
+            print(f"Entry found: {title}, path: {entry_path}", file=sys.stderr)
 
             # Get content
             content = ""
@@ -313,26 +319,23 @@ async def get_zim_entry(zimFilePath: str, entryPath: str, maxContentLength: int 
                 print(f"Entry MIME type: {mime_type}", file=sys.stderr)
 
                 # Get data
-                if mime_type.startswith('text/html'):
+                if mime_type.startswith("text/html"):
                     # Process HTML content
-                    raw_content = bytes(item.content).decode(
-                        'utf-8', errors='replace')
+                    raw_content = bytes(item.content).decode("utf-8", errors="replace")
 
                     # Convert HTML to plain text
                     content = html_to_plain_text(raw_content)
 
-                elif mime_type.startswith('text/'):
+                elif mime_type.startswith("text/"):
                     # Process other text
-                    content = bytes(item.content).decode(
-                        'utf-8', errors='replace')
-                elif mime_type.startswith('image/'):
-                    content = '(Image content - Cannot display directly)'
+                    content = bytes(item.content).decode("utf-8", errors="replace")
+                elif mime_type.startswith("image/"):
+                    content = "(Image content - Cannot display directly)"
                 else:
-                    content = f'(Unsupported content type: {mime_type})'
+                    content = f"(Unsupported content type: {mime_type})"
 
             except Exception as e:
-                print(
-                    f"Error getting entry content: {str(e)}", file=sys.stderr)
+                print(f"Error getting entry content: {str(e)}", file=sys.stderr)
                 content = f"(Error retrieving content: {str(e)})"
 
         except Exception as e:
@@ -340,16 +343,18 @@ async def get_zim_entry(zimFilePath: str, entryPath: str, maxContentLength: int 
             return f"Error: Failed to get ZIM entry: {str(e)}"
 
         # Limit content length to avoid exceeding token limits
-        if content and len(content) > maxContentLength:
-            truncated_content = content[:maxContentLength]
-            content = truncated_content + \
-                f"\n\n... [Content truncated, total of {len(content)} characters, only showing first {maxContentLength} characters] ..."
+        if content and len(content) > max_content_length:
+            truncated_content = content[:max_content_length]
+            content = (
+                truncated_content + f"\n\n... [Content truncated, total of {len(content)} characters, "
+                f"only showing first {max_content_length} characters] ..."
+            )
 
         # Build return content
         result_text = f"# {title}\n\n"
-        result_text += f"Path: {entryPath}\n"
+        result_text += f"Path: {entry_path}\n"
         result_text += f"Type: {content_type or 'Unknown'}\n"
-        result_text += f"## Content\n\n"
+        result_text += "## Content\n\n"
         result_text += content or "(No content)"
 
         return result_text
@@ -357,6 +362,16 @@ async def get_zim_entry(zimFilePath: str, entryPath: str, maxContentLength: int 
     except Exception as e:
         print(f"Error processing ZIM file: {str(e)}", file=sys.stderr)
         return f"Error: Failed to process ZIM file: {str(e)}"
+    finally:
+        # Ensure archive is properly closed to prevent resource leaks
+        if archive is not None:
+            try:
+                # We need to ensure cleanup, the libzim Python binding should handle this via __del__, but we force it.
+                del archive
+                print(f"Archive closed for: {zim_file_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error closing archive: {str(e)}", file=sys.stderr)
+
 
 
 if __name__ == "__main__":
